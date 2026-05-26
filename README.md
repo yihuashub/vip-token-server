@@ -27,9 +27,12 @@ All endpoints accept an optional `X-API-Key` header. If the `API_KEY` environmen
 
 - `app/main.py` — the entire server: FastAPI routes, provisioning helper, JSON-file storage, and the inline HTML/JS UI. Single file, ~270 lines.
 - `requirements.txt` — pinned dependencies: fastapi, uvicorn, python-vipaccess, oath.
-- `run.bat` — Windows launcher: creates the venv on first run, installs deps, sets `DATA_PATH=C:\vip-data\credentials.json`, starts uvicorn on `127.0.0.1:8080`.
-- `register.bat` — Windows helper for registering a user from cmd: `register.bat alice`.
-- `.gitignore` — excludes `venv/`, `__pycache__/`, `credentials.json`, etc. **Never commit `credentials.json`** — it is the entire security boundary.
+- `install.bat` — one-click Windows installer: checks Python, creates venv + installs deps, makes `C:\vip-data`, drops a `VIP Token` shortcut on the Desktop.
+- `launch.py` — what the desktop shortcut runs. Detects whether the server is already up; spawns a hidden detached uvicorn if not; then opens the browser to the UI.
+- `uninstall.bat` — stops the running server (via PID file) and removes the desktop shortcut. Leaves `venv\` and `credentials.json` in place (delete by hand if you want).
+- `run.bat` — manual launcher with a visible console (use for debugging when something's wrong).
+- `register.bat` — register a user from cmd: `register.bat alice`.
+- `.gitignore` — excludes `venv/`, `__pycache__/`, `credentials.json`, `.server.pid`, etc. **Never commit `credentials.json`** — it is the entire security boundary.
 
 ## Running locally (macOS / Linux)
 
@@ -41,16 +44,33 @@ DATA_PATH=./credentials.json venv/bin/uvicorn app.main:app --host 127.0.0.1 --po
 
 Open <http://127.0.0.1:8080>. Click `+ new user` to register your first user.
 
-## Running on a Windows VM (the intended deployment)
+## Installing on a Windows VM (the intended deployment)
 
-1. Install Python 3.11+ from python.org (check "Add to PATH" during install).
-2. Copy the project folder to the VM. **Do not copy `venv/`** — the macOS/Linux venv will not work on Windows; `run.bat` rebuilds it.
-3. Double-click `run.bat`. First run creates the venv and installs deps (~3 minutes; pycryptodome may need to compile). Subsequent runs start in ~2 seconds.
-4. Anyone who RDPs into the VM opens <http://localhost:8080> in a browser and selects their username from the dropdown.
+### One-click install (recommended)
 
-### Auto-start at boot (optional, via NSSM)
+1. Install Python 3.10+ from <https://www.python.org/downloads/> — during install, check **"Add python.exe to PATH"**.
+2. `git clone https://github.com/yihuashub/vip-token-server.git` (or download the ZIP and extract). **Do not copy a macOS/Linux `venv/` over** — let the installer build a Windows one.
+3. Double-click **`install.bat`**. It will:
+   - verify Python is installed
+   - create `venv\` and install dependencies (~2-3 min on first run)
+   - create `C:\vip-data\` for the seed store
+   - drop **`VIP Token`** on your Desktop (uses the Windows key icon)
+4. Double-click the `VIP Token` shortcut. The server starts silently in the background and your default browser opens to <http://localhost:8080>.
+5. Click `+ new user` to register the first credential.
 
-Download [NSSM](https://nssm.cc/download), unzip, then in an Administrator cmd:
+Subsequent double-clicks just open the browser — the server keeps running until the VM reboots (no boot-time auto-start, by design).
+
+### Uninstall
+
+Double-click `uninstall.bat`. It stops the server and removes the Desktop shortcut. `credentials.json` and the `venv\` folder are left alone — delete by hand if you really want them gone.
+
+### Advanced / debugging
+
+Use `run.bat` instead of the shortcut to see uvicorn's log output in a console window. This is the right tool when something is broken and you need to see why.
+
+### Auto-start at boot (rarely needed)
+
+If you want the server to come up automatically at VM boot (so the first user after a reboot doesn't have to start it), install it as a service with [NSSM](https://nssm.cc/download):
 
 ```cmd
 nssm install VIPTokenServer C:\vip-token-server\venv\Scripts\uvicorn.exe
@@ -61,7 +81,7 @@ nssm set    VIPTokenServer Start SERVICE_AUTO_START
 nssm start  VIPTokenServer
 ```
 
-After this the service runs as `LocalSystem` from boot, no login required.
+After this the service runs as `LocalSystem` from boot, no user login required. This is an alternative to the Desktop shortcut, not an addition — if you set up NSSM, double-clicking the shortcut still works (it just sees the server is already up and opens the browser).
 
 ## Configuration (environment variables)
 
