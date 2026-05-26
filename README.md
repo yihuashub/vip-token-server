@@ -27,9 +27,10 @@ All endpoints accept an optional `X-API-Key` header. If the `API_KEY` environmen
 
 - `app/main.py` — the entire server: FastAPI routes, provisioning helper, JSON-file storage, and the inline HTML/JS UI. Single file, ~270 lines.
 - `requirements.txt` — pinned dependencies: fastapi, uvicorn, python-vipaccess, oath.
-- `install.bat` — one-click Windows installer: checks Python, creates venv + installs deps, makes `C:\vip-data`, drops a `VIP Token` shortcut on the Desktop.
+- `install.bat` — one-click Windows installer: checks Python, creates venv + installs deps, makes `%LOCALAPPDATA%\vip-token-server`, drops a `VIP Token` shortcut on the Desktop.
+- `install-embedded.bat` — same as `install.bat` but **no admin and no system Python required**. Downloads Python 3.12 embeddable ZIP from python.org and uses it locally. Use this if you can't install Python on the VM.
 - `launch.py` — what the desktop shortcut runs. Detects whether the server is already up; spawns a hidden detached uvicorn if not; then opens the browser to the UI.
-- `uninstall.bat` — stops the running server (via PID file) and removes the desktop shortcut. Leaves `venv\` and `credentials.json` in place (delete by hand if you want).
+- `uninstall.bat` — stops the running server (via PID file) and removes the desktop shortcut. Leaves `venv\`, `python\` and `credentials.json` in place (delete by hand if you want).
 - `run.bat` — manual launcher with a visible console (use for debugging when something's wrong).
 - `register.bat` — register a user from cmd: `register.bat alice`.
 - `.gitignore` — excludes `venv/`, `__pycache__/`, `credentials.json`, `.server.pid`, etc. **Never commit `credentials.json`** — it is the entire security boundary.
@@ -53,16 +54,26 @@ Open <http://127.0.0.1:8080>. Click `+ new user` to register your first user.
 3. Double-click **`install.bat`**. It will:
    - verify Python is installed
    - create `venv\` and install dependencies (~2-3 min on first run)
-   - create `C:\vip-data\` for the seed store
+   - create `%LOCALAPPDATA%\vip-token-server\` for the seed store
    - drop **`VIP Token`** on your Desktop (uses the Windows key icon)
 4. Double-click the `VIP Token` shortcut. The server starts silently in the background and your default browser opens to <http://localhost:8080>.
 5. Click `+ new user` to register the first credential.
 
 Subsequent double-clicks just open the browser — the server keeps running until the VM reboots (no boot-time auto-start, by design).
 
+### No admin rights on the VM? Use `install-embedded.bat` instead
+
+If your company VM blocks the python.org installer (no admin, UAC denial, group policy, etc.), `install-embedded.bat` is the universal fallback. **No system Python required, no admin, no installer wizard.**
+
+It downloads the official Python 3.12 *embeddable* ZIP (about 10 MB) from python.org, extracts it into a `python\` folder inside the project, bootstraps `pip` via `get-pip.py`, then installs the dependencies — all into the project folder. Nothing touches the registry, `Program Files`, or system PATH.
+
+Requirements: outbound HTTPS to `python.org` and `pypi.org` must work. Everything else stays the same — same desktop shortcut, same UI, same launch behavior.
+
+> **Tip:** Even with the regular installer, you don't need admin if you uncheck **"Install for all users"** in the python.org installer's first page — it installs to `%LOCALAPPDATA%\Programs\Python\` instead. Try this before the embedded route.
+
 ### Uninstall
 
-Double-click `uninstall.bat`. It stops the server and removes the Desktop shortcut. `credentials.json` and the `venv\` folder are left alone — delete by hand if you really want them gone.
+Double-click `uninstall.bat`. It stops the server and removes the Desktop shortcut. `credentials.json`, the `venv\` folder, and the `python\` folder (if you used the embedded install) are left alone — delete by hand if you really want them gone.
 
 ### Advanced / debugging
 
@@ -76,18 +87,18 @@ If you want the server to come up automatically at VM boot (so the first user af
 nssm install VIPTokenServer C:\vip-token-server\venv\Scripts\uvicorn.exe
 nssm set    VIPTokenServer AppParameters "app.main:app --host 127.0.0.1 --port 8080"
 nssm set    VIPTokenServer AppDirectory   C:\vip-token-server
-nssm set    VIPTokenServer AppEnvironmentExtra DATA_PATH=C:\vip-data\credentials.json
+nssm set    VIPTokenServer AppEnvironmentExtra DATA_PATH=C:\ProgramData\vip-token-server\credentials.json
 nssm set    VIPTokenServer Start SERVICE_AUTO_START
 nssm start  VIPTokenServer
 ```
 
-After this the service runs as `LocalSystem` from boot, no user login required. This is an alternative to the Desktop shortcut, not an addition — if you set up NSSM, double-clicking the shortcut still works (it just sees the server is already up and opens the browser).
+(NSSM requires admin rights to install, and the service runs as `LocalSystem` from boot — that's why we use `C:\ProgramData` here instead of the per-user `%LOCALAPPDATA%`.) This is an alternative to the Desktop shortcut, not an addition — if you set up NSSM, double-clicking the shortcut still works (it just sees the server is already up and opens the browser).
 
 ## Configuration (environment variables)
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DATA_PATH` | `credentials.json` (cwd) | Where to read/write the seed store. On Windows, set to an absolute path outside the project dir. |
+| `DATA_PATH` | `%LOCALAPPDATA%\vip-token-server\credentials.json` on Windows, `./credentials.json` elsewhere | Where to read/write the seed store. Override to put it on a backed-up drive. |
 | `API_KEY` | unset (no auth) | If set, all endpoints require `X-API-Key: <value>`. Recommended only if you intentionally expose beyond localhost. |
 | `TOKEN_MODEL` | `VSST` | Default provisioning model. `VSST` = desktop token (compatible with most US financial services). `VSMT` = mobile token. Override per-call with `?token_model=VSMT`. |
 

@@ -25,9 +25,15 @@ HEALTH = URL + "/health"
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 PID_FILE = os.path.join(PROJECT_DIR, ".server.pid")
 
-# Default data path: C:\vip-data\credentials.json on Windows, ./credentials.json elsewhere.
+# Default data path:
+#   Windows: %LOCALAPPDATA%\vip-token-server\credentials.json  (no admin rights needed)
+#   *nix:    ./credentials.json
 DEFAULT_DATA_PATH = (
-    r"C:\vip-data\credentials.json"
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+        "vip-token-server",
+        "credentials.json",
+    )
     if sys.platform == "win32"
     else os.path.join(PROJECT_DIR, "credentials.json")
 )
@@ -42,15 +48,14 @@ def is_running() -> bool:
         return False
 
 
-def venv_python() -> str:
-    """Resolve the venv's pythonw/python executable, or fall back to system Python."""
-    if sys.platform == "win32":
-        candidate = os.path.join(PROJECT_DIR, "venv", "Scripts", "pythonw.exe")
-    else:
-        candidate = os.path.join(PROJECT_DIR, "venv", "bin", "python3")
-    if os.path.exists(candidate):
-        return candidate
-    return "pythonw.exe" if sys.platform == "win32" else sys.executable
+def python_for_subprocess() -> str:
+    """Python interpreter to use for the spawned uvicorn subprocess.
+
+    `sys.executable` is whichever interpreter launched this script — the venv,
+    the embedded portable Python, or system Python. Using it directly means
+    the subprocess uses the same interpreter (and therefore the same site-packages).
+    """
+    return sys.executable
 
 
 def start_server() -> bool:
@@ -58,7 +63,7 @@ def start_server() -> bool:
 
     env = {**os.environ, "DATA_PATH": DATA_PATH}
     cmd = [
-        venv_python(),
+        python_for_subprocess(),
         "-m",
         "uvicorn",
         "app.main:app",

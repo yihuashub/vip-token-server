@@ -39,8 +39,8 @@ venv\Scripts\pip.exe install --quiet -r requirements.txt
 if errorlevel 1 goto :error
 
 REM ---- [4/5] Data directory ----
-echo [4/5] Creating data directory C:\vip-data ...
-if not exist C:\vip-data mkdir C:\vip-data
+echo [4/5] Creating data directory %LOCALAPPDATA%\vip-token-server ...
+if not exist "%LOCALAPPDATA%\vip-token-server" mkdir "%LOCALAPPDATA%\vip-token-server"
 
 REM ---- [5/5] Desktop shortcut ----
 echo [5/5] Creating desktop shortcut...

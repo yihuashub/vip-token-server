@@ -30,7 +30,8 @@ if exist "%SHORTCUT%" (
 
 echo.
 echo Done. Note: the following were NOT removed (manual cleanup if you want):
-echo   - venv\                          (the virtual environment)
-echo   - C:\vip-data\credentials.json   (your seeds — back up before deleting!)
+if exist venv   echo   - venv\                                                 (the virtual environment from install.bat)
+if exist python echo   - python\                                               (embedded Python from install-embedded.bat)
+echo   - %LOCALAPPDATA%\vip-token-server\credentials.json  (your seeds — back up before deleting!)
 echo.
 pause
