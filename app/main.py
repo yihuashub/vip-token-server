@@ -1,13 +1,17 @@
 import base64
+import io
 import json
 import os
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import oath
+import qrcode
+import qrcode.image.svg
 from fastapi import FastAPI, Header, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from vipaccess import provision as vp
 
@@ -57,6 +61,18 @@ def _totp(secret_b32: str) -> tuple[str, int]:
     seed_hex = base64.b32decode(secret_b32).hex()
     now = int(time.time())
     return oath.totp(seed_hex, t=now), 30 - now % 30
+
+
+def _otpauth_uri(credential_id: str, secret_b32: str) -> str:
+    """RFC 6238 / Google Authenticator key URI for this credential."""
+    issuer = "Symantec"
+    label = quote(f"{issuer}:{credential_id}", safe="")
+    return (
+        f"otpauth://totp/{label}"
+        f"?secret={secret_b32}"
+        f"&issuer={issuer}"
+        f"&digits=6&algorithm=SHA1&period=30"
+    )
 
 
 def _auth(x_api_key: str | None) -> None:
@@ -128,6 +144,17 @@ INDEX_HTML = """<!doctype html>
           font-size: 11px; text-align: center; margin-top: 24px; }
   .empty { color: #aaa; text-align: center; padding: 60px 0; font-size: 14px; }
   .copied { color: #4a8 !important; }
+  .phone-btn { display: block; margin: 20px auto 0; background: none; border: 1px solid #ddd;
+               color: #888; cursor: pointer; font-size: 12px; padding: 5px 12px; border-radius: 4px; }
+  .phone-btn:hover { color: #4a8; border-color: #4a8; }
+  .qr-panel { margin-top: 16px; padding: 14px; border: 1px solid #eee;
+              border-radius: 6px; background: #fafafa; }
+  .qr-panel img { display: block; margin: 8px auto; max-width: 240px; height: auto; }
+  .qr-warn { font-size: 11px; color: #b85; text-align: center; margin-top: 8px;
+             line-height: 1.5; }
+  .qr-uri { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
+            color: #aaa; word-break: break-all; margin-top: 10px; padding: 6px;
+            background: white; border-radius: 3px; user-select: all; cursor: text; }
 </style>
 </head>
 <body>
@@ -163,28 +190,78 @@ async function loadUsers(selectName) {
   if (selectName) { sel.value = selectName; refresh(); }
 }
 
+let currentUser = null;
+
+function bindTokenClick(token) {
+  $('tok').onclick = (e) => {
+    navigator.clipboard.writeText(token);
+    e.target.classList.add('copied');
+    setTimeout(() => e.target.classList.remove('copied'), 600);
+  };
+}
+
 async function refresh() {
   const u = sel.value;
   if (!u) {
     display.className = 'empty';
     display.textContent = names_present() ? 'Select a user above' : 'No users yet';
+    currentUser = null;
+    qrShownFor = null;
     return;
   }
   const r = await fetch(`/users/${encodeURIComponent(u)}/token`);
   if (!r.ok) { display.className = 'empty'; display.textContent = 'error'; return; }
   const d = await r.json();
   const pct = (d.seconds_until_next / 30) * 100;
-  display.className = '';
-  display.innerHTML = `
-    <div class="token" id="tok" title="click to copy">${d.token}</div>
-    <div class="meta">expires in ${d.seconds_until_next}s</div>
-    <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
-    <div class="cred">${d.credential_id}</div>`;
-  $('tok').onclick = (e) => {
-    navigator.clipboard.writeText(d.token);
-    e.target.classList.add('copied');
-    setTimeout(() => e.target.classList.remove('copied'), 600);
-  };
+
+  if (u !== currentUser) {
+    // user changed — rebuild the whole display (collapses any open QR)
+    display.className = '';
+    display.innerHTML = `
+      <div class="token" id="tok" title="click to copy">${d.token}</div>
+      <div class="meta" id="meta">expires in ${d.seconds_until_next}s</div>
+      <div class="bar"><div class="fill" id="fill" style="width:${pct}%"></div></div>
+      <div class="cred">${d.credential_id}</div>
+      <button class="phone-btn" id="phoneBtn">Show QR for phone</button>
+      <div id="qrPanel"></div>`;
+    $('phoneBtn').onclick = () => togglePhoneQR(u);
+    currentUser = u;
+    qrShownFor = null;
+  } else {
+    // same user — only update the parts that change, leave QR panel intact
+    $('tok').textContent = d.token;
+    $('meta').textContent = `expires in ${d.seconds_until_next}s`;
+    $('fill').style.width = pct + '%';
+  }
+  bindTokenClick(d.token);
+}
+
+let qrShownFor = null;
+async function togglePhoneQR(u) {
+  const panel = $('qrPanel');
+  const btn = $('phoneBtn');
+  if (qrShownFor === u) {
+    panel.innerHTML = '';
+    btn.textContent = 'Show QR for phone';
+    qrShownFor = null;
+    return;
+  }
+  panel.innerHTML = '<div class="qr-panel" style="text-align:center;color:#888;font-size:13px">loading...</div>';
+  const r = await fetch(`/users/${encodeURIComponent(u)}/uri`);
+  if (!r.ok) { panel.innerHTML = '<div class="qr-panel">error</div>'; return; }
+  const d = await r.json();
+  panel.innerHTML = `
+    <div class="qr-panel">
+      <img src="/users/${encodeURIComponent(u)}/qr.svg" alt="QR code">
+      <div class="qr-warn">
+        Scan with any TOTP app (Google Authenticator / Microsoft Authenticator / Authy / 1Password).<br>
+        Symantec's own VIP Access app does NOT accept third-party imports.<br>
+        <b>This QR contains the seed — anyone who sees it can compute tokens forever.</b>
+      </div>
+      <div class="qr-uri" title="otpauth URI (manual entry fallback)">${d.uri}</div>
+    </div>`;
+  btn.textContent = 'Hide QR';
+  qrShownFor = u;
 }
 
 function names_present() {
@@ -318,6 +395,52 @@ def get_token(
         token=code,
         seconds_until_next=sec,
     )
+
+
+@app.get("/users/{username}/uri")
+def get_uri(
+    username: str, x_api_key: str | None = Header(default=None, alias="X-API-Key")
+):
+    """Return the otpauth:// URI for importing this credential into a third-party
+    TOTP app (Google Authenticator, Authy, 1Password, Microsoft Authenticator, ...).
+    Anyone who can read this URI can compute the user's TOTPs forever — treat it
+    as a secret."""
+    _auth(x_api_key)
+    with _lock:
+        data = _load()
+    if username not in data:
+        raise HTTPException(status_code=404, detail="username not registered")
+    info = data[username]
+    return {
+        "username": username,
+        "credential_id": info["credential_id"],
+        "uri": _otpauth_uri(info["credential_id"], info["secret_b32"]),
+    }
+
+
+@app.get("/users/{username}/qr.svg")
+def get_qr(
+    username: str, x_api_key: str | None = Header(default=None, alias="X-API-Key")
+):
+    """Return the otpauth URI rendered as an SVG QR code so a phone TOTP app
+    can scan it directly. Same secrecy caveat as /uri — anyone who sees the QR
+    has the seed."""
+    _auth(x_api_key)
+    with _lock:
+        data = _load()
+    if username not in data:
+        raise HTTPException(status_code=404, detail="username not registered")
+    info = data[username]
+    uri = _otpauth_uri(info["credential_id"], info["secret_b32"])
+    img = qrcode.make(
+        uri,
+        image_factory=qrcode.image.svg.SvgPathImage,
+        box_size=10,
+        border=2,
+    )
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
 
 
 @app.delete("/users/{username}", status_code=204)
