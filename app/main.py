@@ -94,6 +94,11 @@ class RegisterResponse(BaseModel):
     token_model: str
 
 
+class ImportBody(BaseModel):
+    credential_id: str
+    secret_b32: str
+
+
 class TokenResponse(BaseModel):
     username: str
     credential_id: str
@@ -126,10 +131,17 @@ INDEX_HTML = """<!doctype html>
   .add-form { display: flex; gap: 6px; margin-top: 8px; }
   .add-form input { flex: 1; padding: 9px; font-size: 14px; border: 1px solid #ccc;
                     border-radius: 4px; box-sizing: border-box; }
-  .add-form button { padding: 8px 14px; font-size: 13px; border: 1px solid #ccc;
+  .add-form button, .import-form button {
+                     padding: 8px 14px; font-size: 13px; border: 1px solid #ccc;
                      background: white; border-radius: 4px; cursor: pointer; }
-  .add-form button[type=submit] { background: #4a8; border-color: #4a8; color: white; }
-  .add-form button:disabled { opacity: 0.5; cursor: wait; }
+  .add-form button[type=submit], .import-form button[type=submit] {
+                     background: #4a8; border-color: #4a8; color: white; }
+  .add-form button:disabled, .import-form button:disabled { opacity: 0.5; cursor: wait; }
+  .import-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .import-form input { padding: 9px; font-size: 14px; border: 1px solid #ccc;
+                       border-radius: 4px; box-sizing: border-box;
+                       font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .import-form input:first-of-type { font-family: inherit; }
   .status { font-size: 12px; color: #c33; margin-top: 6px; min-height: 16px; }
   .status.info { color: #888; }
   .token { font-size: 56px; font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -160,14 +172,29 @@ INDEX_HTML = """<!doctype html>
 <body>
 <div class="header">
   <h1>VIP TOKEN</h1>
-  <button id="addBtn" class="add-btn">+ new user</button>
+  <span>
+    <button id="addBtn" class="add-btn">+ new</button>
+    <button id="importBtn" class="add-btn">&darr; import</button>
+  </span>
 </div>
 <select id="user"><option>loading...</option></select>
+
 <form id="addForm" class="add-form" hidden>
   <input id="addName" placeholder="username (e.g. alice)" autocomplete="off">
   <button type="submit" id="addSubmit">Add</button>
   <button type="button" id="addCancel">cancel</button>
 </form>
+
+<form id="importForm" class="import-form" hidden>
+  <input id="impName" placeholder="username (label only)" autocomplete="off">
+  <input id="impCred" placeholder="credential ID (e.g. VSST14289634)" autocomplete="off">
+  <input id="impSeed" placeholder="base32 secret (32 chars)" autocomplete="off">
+  <div style="display:flex;gap:6px">
+    <button type="submit" id="impSubmit">Import</button>
+    <button type="button" id="impCancel">cancel</button>
+  </div>
+</form>
+
 <div id="status" class="status"></div>
 <div id="display" class="empty">Select a user above</div>
 
@@ -175,7 +202,16 @@ INDEX_HTML = """<!doctype html>
 const $ = id => document.getElementById(id);
 const sel = $('user'), addBtn = $('addBtn'), addForm = $('addForm'),
       addName = $('addName'), addSubmit = $('addSubmit'),
-      addCancel = $('addCancel'), status = $('status'), display = $('display');
+      addCancel = $('addCancel'), status = $('status'), display = $('display'),
+      importBtn = $('importBtn'), importForm = $('importForm'),
+      impName = $('impName'), impCred = $('impCred'), impSeed = $('impSeed'),
+      impSubmit = $('impSubmit'), impCancel = $('impCancel');
+
+function hideForms() {
+  addForm.hidden = true; importForm.hidden = true;
+  addBtn.hidden = false; importBtn.hidden = false;
+  status.textContent = '';
+}
 
 async function loadUsers(selectName) {
   const r = await fetch('/users');
@@ -269,16 +305,62 @@ function names_present() {
 }
 
 addBtn.onclick = () => {
-  addBtn.hidden = true;
+  hideForms();
+  addBtn.hidden = true; importBtn.hidden = true;
   addForm.hidden = false;
-  status.textContent = '';
   addName.focus();
 };
-addCancel.onclick = () => {
-  addForm.hidden = true;
-  addBtn.hidden = false;
-  addName.value = '';
-  status.textContent = '';
+addCancel.onclick = () => { addName.value = ''; hideForms(); };
+
+importBtn.onclick = () => {
+  hideForms();
+  addBtn.hidden = true; importBtn.hidden = true;
+  importForm.hidden = false;
+  impName.focus();
+};
+impCancel.onclick = () => {
+  impName.value = ''; impCred.value = ''; impSeed.value = '';
+  hideForms();
+};
+
+importForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const name = impName.value.trim();
+  const cred = impCred.value.trim();
+  const seed = impSeed.value.trim().replace(/\\s/g, '').toUpperCase();
+  if (!name || !cred || !seed) {
+    status.className = 'status';
+    status.textContent = 'all three fields required';
+    return;
+  }
+  impSubmit.disabled = true;
+  status.className = 'status info';
+  status.textContent = 'importing...';
+  try {
+    const r = await fetch(`/users/${encodeURIComponent(name)}/import`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({credential_id: cred, secret_b32: seed}),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      impName.value = ''; impCred.value = ''; impSeed.value = '';
+      hideForms();
+      status.className = 'status info';
+      status.textContent = `imported ${name} -> ${d.credential_id}`;
+      setTimeout(() => { status.textContent = ''; }, 4000);
+      await loadUsers(name);
+    } else {
+      status.className = 'status';
+      const msg = (d.detail && d.detail.error) || d.detail || `HTTP ${r.status}`;
+      status.textContent = String(msg);
+    }
+  } catch (err) {
+    status.className = 'status';
+    status.textContent = 'network error: ' + err.message;
+  } finally {
+    impSubmit.disabled = false;
+  }
 };
 addForm.onsubmit = async (e) => {
   e.preventDefault();
@@ -292,8 +374,7 @@ addForm.onsubmit = async (e) => {
     const d = await r.json();
     if (r.ok) {
       addName.value = '';
-      addForm.hidden = true;
-      addBtn.hidden = false;
+      hideForms();
       status.className = 'status info';
       status.textContent = `✓ ${name} → ${d.credential_id}`;
       setTimeout(() => { status.textContent = ''; }, 4000);
@@ -394,6 +475,62 @@ def get_token(
         credential_id=info["credential_id"],
         token=code,
         seconds_until_next=sec,
+    )
+
+
+@app.post("/users/{username}/import", response_model=RegisterResponse, status_code=201)
+def import_user(
+    username: str,
+    body: ImportBody,
+    force: bool = False,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    """Import an existing (credential_id, secret_b32) pair without contacting
+    Symantec. Useful when you already have the seed (e.g. from another
+    vipaccess install you're migrating, or for testing)."""
+    _auth(x_api_key)
+    cred_id = body.credential_id.strip()
+    secret = body.secret_b32.strip().upper()
+    # Validate base32 (also strips spaces some users add)
+    secret = secret.replace(" ", "")
+    try:
+        decoded = base64.b32decode(secret)
+        if len(decoded) < 10:
+            raise ValueError("seed too short")
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"secret_b32 is not a valid base32 seed: {e}",
+        )
+    if not cred_id:
+        raise HTTPException(status_code=400, detail="credential_id is required")
+
+    with _lock:
+        data = _load()
+        if username in data and not force:
+            existing = data[username]
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "user already registered",
+                    "credential_id": existing["credential_id"],
+                    "hint": "pass ?force=true to overwrite",
+                },
+            )
+        cred = {
+            "credential_id": cred_id,
+            "secret_b32": secret,
+            "expiry": "imported (unknown)",
+            "token_model": "imported",
+            "created_at": int(time.time()),
+        }
+        data[username] = cred
+        _save(data)
+    return RegisterResponse(
+        username=username,
+        credential_id=cred["credential_id"],
+        expiry=cred["expiry"],
+        token_model=cred["token_model"],
     )
 
 
